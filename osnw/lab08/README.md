@@ -2,73 +2,44 @@
 
 과제 시나리오
 
-1. server는 client 연결 후 구조체(string,정수) 를 받는다.
-2. fork 로 클라이언트를 응대하는 child 멀티 프로세스를 만든다.
-3. 컨슈머를 만들어서(fork) 무한히 string(rotating),정수+1 하여 공유 메모리에 쓴다.  
-   이때 세마포어를 사용해서 CS 를 보호할 것
-4. 프로듀서는 공유메모리의 데이터를 읽어서 클라이언트로 데이터를 반드다.
-5. client 프로세스는 데이터가 오는 즉시, echo 를 한다.
+1. 멀티스레드 서버 아키텍처를 만든다.  
+   1.1 클라이언트의 accept는 메인 스레드가 담당하고  
+   1.2 이후의 네트워크 IO는 워커 스레드가 담당한다.
 
-공유 메모리로 server의 parentd-child process간 소통이 되어야 한다.
+2. 서버워커스레드는 프로듀서와 컨슈머로 분리된다. ( 워커스레드 2개 생성 )  
+   2.1 프로듀서 스레드는 클라이언트로부터 정수,문자열을 받는다.
+   2.2 받은 정수는 1씩 증가를 시키고, 문자열은 rotate를 하며 공유메모리 공간에 넣는다.  
+   2.3 컨슈머 스레드는 공유메모리공간의 데이터를 받아온다.
+   2.4 받은 데이터를 클라이언트로 전송한다.
 
-- 세마포어를 사용할 것
+- 스레드간의 크리티컬 섹션에는 뮤텍스와 signal&wait(동기화)를 활용해서 공유자원에 대한 보호를 한다.
+
+3. 클라이언트는 받은 데이터를 출력하며, 무한루프를 돈다.
+
+## 코드 스니펫
+
+1. 구조체 네트워크 io
+2. 스레드간 공유 변수 구조체 만들기
+3. 스레드간 뮤텍스 보장
+4. 스레드간 동기화 (시그널) 보장  
+   4.1 프로듀서의 생성 시작 기다리기  
+   4.2 프로듀서의 CS접근 종료 기다리기
+
+```c
+	pthread_mutex_lock(&t_lock[lock_id]); // --- CS 섹션 START
+	pthread_cond_signal(&t_lock[lock_id]);
+  pthread_cond_wait(&t_cond[lock_id], &t_lock[lock_id]);
+	pthread_mutex_unlock(&t_lock[lock_id]); // --- CS 섹션 END
+```
 
 ### 핵심 키워드
 
-멀티프로세스, fork
-소켓프로그래밍
-생성자 소비자
-쉐어드 메모리
-세마포어
-
-### IPCS 확인 및 삭제 명령어
-
-- ipcs 확인하기
-
-```
-ubuntu@ubuntu:~/workspace$ ipcs
-
------- Message Queues --------
-key        msqid      owner      perms      used-bytes   messages
-
------- Shared Memory Segments --------
-key        shmid      owner      perms      bytes      nattch     status
-0x000004d2 0          ubuntu     666        4          2
-
------- Semaphore Arrays --------
-key        semid      owner      perms      nsems
-0x00000d95 0          ubuntu     666        1
-```
-
-- ipcs 삭제하기
-
-```
-ipcrm shm 1234(공유메모리 id)
-ipcrm sem 3477(사마포어 id)
-
-
-ubuntu@ubuntu:~/workspace$ ipcrm shm 0
-resource(s) deleted
-ubuntu@ubuntu:~/workspace$ ipcrm sem 0
-resource(s) deleted
-
-
-ubuntu@ubuntu:~/workspace$ ipcs
-
------- Message Queues --------
-key        msqid      owner      perms      used-bytes   messages
-
------- Shared Memory Segments --------
-key        shmid      owner      perms      bytes      nattch     status
-
------- Semaphore Arrays --------
-key        semid      owner      perms      nsems
-
-```
+멀티스레드, 소켓 프로그래밍, producer-consumer 패턴  
+뮤텍스(세마포어)
 
 ## dist 코드 컴파일
 
-gcc ./echo_server_fork.c -o echo_server_fork
+gcc ./echo_server_thread.c -o echo_server_thread -lpthread
 gcc ./echo_client.c -o echo_client
 
 ## 예제 코드(src폴더) 설명

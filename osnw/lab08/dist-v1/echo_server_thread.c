@@ -1,0 +1,113 @@
+#include <pthread.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <stdio.h>
+
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+
+#define MAXLINE 1024
+#define PORTNUM 3600
+/* 스레드 예제 9) 스레드 에코 서버
+	- 서버 접속시 accpet은 메인 스레드가 ,
+	- 이후 read/write는 서브 스레드가 담당	
+*/
+
+struct network_data
+{
+	int num;
+	char content[100];
+};
+
+void *thread_func(void *data)
+{
+	int sockfd = *((int *)data); // typecasting - client_id
+	int readn;
+	socklen_t addrlen;
+	char buf[MAXLINE];
+	struct sockaddr_in client_addr;
+	memset(buf, 0x00, MAXLINE);
+	addrlen = sizeof(client_addr);
+
+	getpeername(sockfd, (struct sockaddr *)&client_addr, &addrlen);
+
+	struct network_data n_data;
+
+	while ((readn = read(sockfd, (void *)&n_data, sizeof(n_data))) > 0)
+	{
+		int num = ntohl(n_data.num);
+		printf("Read Data %s(%d) : %d \n",
+			   inet_ntoa(client_addr.sin_addr),
+			   ntohs(client_addr.sin_port),
+			   num);
+
+		for (int i = 0; i < 100; i++)
+		{
+			num += 1;
+			n_data.num = htonl(num);
+			write(sockfd, (void *)&n_data, sizeof(n_data));
+			sleep(1);
+		}
+		// memset(buf, 0x00, MAXLINE);
+	}
+	close(sockfd);
+	printf("worker thread end\n");
+	return 0;
+}
+
+int main(int argc, char **argv)
+{
+	int listen_fd, client_fd;
+	socklen_t addrlen;
+	int readn;
+	char buf[MAXLINE];
+	pthread_t thread_id;
+
+	struct sockaddr_in server_addr, client_addr;
+
+	/* socket create & bind & listen */
+	if ((listen_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+	{
+		return 1;
+	}
+	memset((void *)&server_addr, 0x00, sizeof(server_addr));
+	server_addr.sin_family = AF_INET;
+	server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	server_addr.sin_port = htons(PORTNUM);
+
+	if (bind(listen_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1)
+	{
+		perror("bind error");
+		return 1;
+	}
+	if (listen(listen_fd, 5) == -1)
+	{
+		perror("listen error");
+		return 1;
+	}
+	/* client accpet & make thread */
+	while (1)
+	{
+		/* [1] accept */
+		addrlen = sizeof(client_addr);
+		client_fd = accept(listen_fd,
+						   (struct sockaddr *)&client_addr, &addrlen);
+		printf("new client connected from %s:%d\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+		if (client_fd == -1)
+		{
+			printf("accept error\n");
+		}
+		else
+		/* [2] thread_create -  */
+		{
+			// thread_create(id,,thread_func,args...)
+			pthread_create(&thread_id, NULL, thread_func, (void *)&client_fd);
+			pthread_detach(thread_id);
+		}
+	}
+	return 0;
+}
