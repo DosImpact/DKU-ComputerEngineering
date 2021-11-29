@@ -73,7 +73,7 @@ int main(int argc, char **argv)
             return 1;
         }
         n_data.num = ntohl(n_data.num);
-        printf("read : %d \n", n_data.num);
+        printf("read from server : %d %s ", n_data.num, n_data.content);
     }
     // 4. 연결 종료
     close(server_sockfd);

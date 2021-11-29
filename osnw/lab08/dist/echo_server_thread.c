@@ -36,14 +36,37 @@ typedef struct thread_data
 	int lock_id;
 } PARAMS;
 
+void rotate(char *target)
+{
+	int arrLen = strlen(target) - 1; //배열의 길이를 저장할 변수
+	int rNum = 1;					 //rotate를 몇번할지를 받는 변수
+	char *arr;
+
+	// scanf("%d %d", &arrLen, &rNum);
+	arr = (char *)malloc(sizeof(char) * strlen(target)); //동적할당.
+	strcpy(arr, target);
+
+	for (int i = 0; i < arrLen; i++)
+	{
+		arr[(i + 1) % arrLen] = target[i];
+	}
+
+	//동적할당 해제
+	strcpy(target, arr);
+	// printf("rotated %s \n", target);
+	free(arr);
+}
+
 void *thread_func_producer(void *arg)
 {
-	printf("producer-thread construced \n");
+	printf("✔️ producer-thread construced %p \n", arg);
+	// PARAMS props = *((PARAMS *)arg);
+	// printf("props : %d %d %d \n", props.sockfd, props.lock_id, props.producer_tid);
 	// args typecasting
-	PARAMS *pProducer = (PARAMS *)arg;
-	struct network_data *shared_data = &(pProducer->ndata); // - shared data
-	int sockfd = pProducer->sockfd;							//  - client_id
-	int lock_id = pProducer->lock_id;
+	PARAMS *props = (PARAMS *)arg;
+	struct network_data *shared_data = &(props->ndata); // - shared data
+	int sockfd = props->sockfd;							//  - client_id
+	int lock_id = props->lock_id;
 	//
 	int readn;
 	socklen_t addrlen;
@@ -57,35 +80,36 @@ void *thread_func_producer(void *arg)
 
 	struct network_data n_data;
 
-	printf("waiting client data... %d \n", sockfd);
+	printf("✔️ waiting client data... %d \n", sockfd);
 	if ((readn = read(sockfd, (void *)&n_data, sizeof(n_data))) > 0)
 	{
 		pthread_mutex_lock(&t_lock[lock_id]); // --- CS 섹션 START
 
 		/* produce(1) - nework io */
 		int num = ntohl(n_data.num);
-		printf("Read Data %s(%d) : %d \n",
+		char content[100];
+		strcpy(content, n_data.content);
+		printf("Read Data %s(%d) : %s,%d\n",
 			   inet_ntoa(client_addr.sin_addr),
 			   ntohs(client_addr.sin_port),
+			   content,
 			   num);
+		shared_data->num = num;
+		strcpy(shared_data->content, content);
 		pthread_mutex_unlock(&t_lock[lock_id]); // --- CS 섹션 END
 
 		/* produce(2) - write shared thread */
 		for (int i = 0; i < 100; i++)
 		{
-			num += 1;
 			pthread_mutex_lock(&t_lock[lock_id]); // --- CS 섹션 START
-			shared_data->num = num;
+			shared_data->num++;
+			rotate(shared_data->content);
 			pthread_cond_signal(&t_cond[lock_id]);
 			pthread_mutex_unlock(&t_lock[lock_id]); // --- CS 섹션 END
 			sleep(1);
 		}
-		// memset(buf, 0x00, MAXLINE);
 	}
-	else
-	{
-		printf("not waiting...\n");
-	}
+
 	close(sockfd);
 	printf("worker-producer thread end\n");
 	return 0;
@@ -93,12 +117,12 @@ void *thread_func_producer(void *arg)
 
 void *thread_func_consumer(void *arg)
 {
-	printf("consumer-thread construced \n");
+	printf("✔️ consumer-thread construced \n");
 	// args typecasting
-	PARAMS *pProducer = (PARAMS *)arg;
-	struct network_data *shared_data = &(pProducer->ndata); // - shared data
-	int sockfd = pProducer->sockfd;							//  - client_id
-	int lock_id = pProducer->lock_id;
+	PARAMS *props = (PARAMS *)arg;
+	struct network_data *shared_data = &(props->ndata); // - shared data
+	int sockfd = props->sockfd;							//  - client_id
+	int lock_id = props->lock_id;
 	//
 	socklen_t addrlen;
 	char buf[MAXLINE];
@@ -110,22 +134,21 @@ void *thread_func_consumer(void *arg)
 
 	struct network_data n_data;
 
-	while (1)
+	for (int i = 0; i < 100; i++)
 	{
 		pthread_mutex_lock(&t_lock[lock_id]);
 		pthread_cond_wait(&t_cond[lock_id], &t_lock[lock_id]); // > wait 조건 변수를 사용하는 영역을 mutex로 보호
 
 		// read from thread shared memory
 		int num = shared_data->num; // ntohl(n_data.num);
-		printf("Read shared Data  %d \n", num);
+		char *content = shared_data->content;
+		printf("(consumer)Read shared Data  %d %s < ", num, content);
 		pthread_mutex_unlock(&t_lock[lock_id]); // --- CS 섹션 END
 
-		for (int i = 0; i < 100; i++)
-		{
-			n_data.num = htonl(num);
-			write(sockfd, (void *)&n_data, sizeof(n_data));
-			sleep(1);
-		}
+		n_data.num = htonl(num);
+		strcpy(n_data.content, shared_data->content);
+		write(sockfd, (void *)&n_data, sizeof(n_data));
+		// sleep(1);
 	}
 	close(sockfd);
 	printf("worker-consumer thread end\n");
@@ -134,6 +157,8 @@ void *thread_func_consumer(void *arg)
 
 int main(int argc, char **argv)
 {
+	char srcs[10] = "hello";
+	rotate(srcs);
 	int listen_fd, client_fd;
 	socklen_t addrlen;
 	int readn;
@@ -190,24 +215,23 @@ int main(int argc, char **argv)
 		/* [2] thread_create -  */
 		{
 			printf("make prod/cons thread & args\n");
-			PARAMS *pMain;
-			pMain = (PARAMS *)malloc(sizeof(PARAMS));
-			memset((void *)&pMain, 0x00, sizeof(pMain));
-			printf("client_fd  %d ~ pMain->sockfd %d", client_fd, pMain->sockfd);
+			PARAMS *pMain = malloc(sizeof(PARAMS));
+			// memset((void *)&pMain, 0x00, sizeof(PARAMS));
 			pMain->sockfd = client_fd;
 			pMain->consumer_tid = thread_id_cnt + 1;
 			pMain->producer_tid = thread_id_cnt + 2;
 			pMain->lock_id = lock_cnt;
+			printf("client_fd  %d ~ pMain->sockfd %d  address %p\n", client_fd, pMain->sockfd, pMain);
 
 			// thread_create(id,,thread_func_producer,args...)
-			pthread_create(&thread_id[thread_id_cnt], NULL, thread_func_producer, (void *)&pMain);
-			// pthread_detach() 함수는 pthread_join()을 사용하지 않더라도, 쓰레드 종료될때 모든 자원을 해제 됩니다
-			pthread_detach(thread_id[thread_id_cnt]);
-			thread_id_cnt++;
+			// (ㅠBUG)heap 공유할때 그냥 메모리 주소값을 넘기면 되는데, 포인터의 주소값을 넘겨버림
+			pthread_create(&thread_id[pMain->consumer_tid], NULL, thread_func_producer, (void *)pMain);
+			pthread_create(&thread_id[pMain->producer_tid], NULL, thread_func_consumer, (void *)pMain);
 
-			pthread_create(&thread_id[thread_id_cnt], NULL, thread_func_consumer, (void *)&pMain);
-			pthread_detach(thread_id[thread_id_cnt]);
-			thread_id_cnt++;
+			// pthread_detach() 함수는 pthread_join()을 사용하지 않더라도, 쓰레드 종료될때 모든 자원을 해제 됩니다
+			pthread_detach(thread_id[pMain->consumer_tid]);
+			pthread_detach(thread_id[pMain->producer_tid]);
+			thread_id_cnt += 2;
 			lock_cnt++;
 		}
 	}
